@@ -18,15 +18,17 @@ resource "google_secret_manager_secret" "this" {
   for_each = toset(var.secret_names) # Loop over the list of names
 
   project   = var.gcp_project_id
+  location = "us-central1"
   secret_id = each.key # Use the name from the list as the secret_id
 
-  replication {
-  user_managed  {
-    replicas {
-      location = "us-central1"
-    }
-  }
-}
+#  replication {
+#  user_managed  {
+#    replicas {
+#      location = "us-central1"
+#    }
+#  }
+#}
+
 }
 
 # 2. Grant the accessor role for each secret to the specified service account
