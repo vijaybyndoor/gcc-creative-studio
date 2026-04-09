@@ -37,6 +37,7 @@ resource "google_secret_manager_secret_iam_member" "accessor" {
   for_each = toset(var.secret_names) # Loop over the same list
 
   project   = google_secret_manager_secret.this[each.key].project
+  location  = google_secret_manager_secret.this[each.key].location
   secret_id = google_secret_manager_secret.this[each.key].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${var.accessor_sa_email}"
