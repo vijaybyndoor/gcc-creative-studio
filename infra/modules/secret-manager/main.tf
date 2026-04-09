@@ -13,32 +13,29 @@
 # limitations under the License.
 
 # 1. Create the "shell" for each secret in the list
-resource "google_secret_manager_secret" "this" {
+
+resource "google_secret_manager_regional_secret" "this" {
   provider = google-beta
-  for_each = toset(var.secret_names) # Loop over the list of names
+  for_each = toset(var.secret_names)
 
   project   = var.gcp_project_id
-  location = "us-central1"
-  secret_id = each.key # Use the name from the list as the secret_id
-
-#  replication {
-#  user_managed  {
-#    replicas {
-#      location = "us-central1"
-#    }
-#  }
-#}
-
+  location  = "us-central1"
+  secret_id = each.key
 }
 
-# 2. Grant the accessor role for each secret to the specified service account
-resource "google_secret_manager_secret_iam_member" "accessor" {
-  provider = google-beta
-  for_each = toset(var.secret_names) # Loop over the same list
 
-  project   = google_secret_manager_secret.this[each.key].project
-  location  = google_secret_manager_secret.this[each.key].location
-  secret_id = google_secret_manager_secret.this[each.key].secret_id
+
+# 2. Grant the accessor role for each secret to the specified service account
+resource "google_secret_manager_regional_secret_iam_member" "accessor" {
+  provider = google-beta
+  for_each = toset(var.secret_names)
+
+  project   = google_secret_manager_regional_secret.this[each.key].project
+  location  = google_secret_manager_regional_secret.this[each.key].location
+  secret_id = google_secret_manager_regional_secret.this[each.key].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${var.accessor_sa_email}"
 }
+
+
+
