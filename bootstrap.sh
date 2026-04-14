@@ -22,7 +22,7 @@
 # It saves progress and can be safely restarted if it fails.
 # ==============================================================================
 
-set -ex
+set -e
 
 # --- Configuration ---
 REQUIRED_TERRAFORM_VERSION="1.14.1"
