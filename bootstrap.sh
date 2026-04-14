@@ -22,7 +22,7 @@
 # It saves progress and can be safely restarted if it fails.
 # ==============================================================================
 
-set -e
+set -ex
 
 # --- Configuration ---
 REQUIRED_TERRAFORM_VERSION="1.14.1"
@@ -66,6 +66,19 @@ success() { echo -e "${C_GREEN}✅  $1${C_RESET}"; }
 step() { echo -e "\n${C_BLUE}--- Step $1: $2 ---${C_RESET}"; }
 
 # --- Pre-flight Checks & Auto-configuration ---
+
+# --- T-Mobile Config for using regional_secretmanager ---
+# Author: Vijay
+#Function to set regional api endpoint
+configure_regional_secretmanager() {
+    gcloud config set api_endpoint_overrides/secretmanager "https://secretmanager.us-central1.rep.googleapis.com/" >/dev/null
+    #export CLOUDSDK_API_ENDPOINT_OVERRIDES_SECRETMANAGER="https://secretmanager.us-central1.rep.googleapis.com/"
+}
+#Function to un-set regional api endpoint
+clear_regional_secretmanager() {
+    gcloud config unset api_endpoint_overrides/secretmanager >/dev/null 2>&1 || true
+}
+
 
 # Function to automatically determine and set the Firebase Site ID in the .tfvars file
 configure_firebase_site_id() {
@@ -184,8 +197,11 @@ stop_sql_proxy() {
 }
 
 export_db_vars() {
+    #T-Mobile regional_secretmanager api endpoint
+    configure_regional_secretmanager
+
     # Fetch password from Secret Manager
-    DB_PASS=$(gcloud secrets versions access latest --secret="creative-studio-db-password" --project="$GCP_PROJECT_ID")
+    DB_PASS=$(gcloud secrets versions access latest --secret="creative-studio-db-password" --project="$GCP_PROJECT_ID" --location="us-central1")
     
     export DB_USER="studio_user"
     export DB_PASS="$DB_PASS"
@@ -516,6 +532,10 @@ setup_firebase_app() {
 populate_oauth_secrets() {
     step 8 "Automating OAuth Secret Population"
     cd "$REPO_ROOT"
+
+    #T-Mobile regional_secrets_manager api endpoint
+    configure_regional_secretmanager
+
     info "Looking for the OAuth 2.0 Web Client ID using the Firebase Management API..."
 
     local AUTH_TOKEN=$(gcloud auth print-access-token)
@@ -550,8 +570,8 @@ populate_oauth_secrets() {
     fi
 
     info "Populating secrets with Client ID: ${C_YELLOW}${AUTO_OAUTH_CLIENT_ID}${C_RESET}"
-    echo -n "$AUTO_OAUTH_CLIENT_ID" | gcloud secrets versions add GOOGLE_CLIENT_ID --data-file="-" --project="$GCP_PROJECT_ID" --quiet
-    echo -n "$AUTO_OAUTH_CLIENT_ID" | gcloud secrets versions add GOOGLE_TOKEN_AUDIENCE --data-file="-" --project="$GCP_PROJECT_ID" --quiet
+    echo -n "$AUTO_OAUTH_CLIENT_ID" | gcloud secrets versions add GOOGLE_CLIENT_ID --data-file="-" --project="$GCP_PROJECT_ID" --location="us-central1"
+    echo -n "$AUTO_OAUTH_CLIENT_ID" | gcloud secrets versions add GOOGLE_TOKEN_AUDIENCE --data-file="-" --project="$GCP_PROJECT_ID" --location="us-central1"
     success "Secrets 'GOOGLE_CLIENT_ID' and 'GOOGLE_TOKEN_AUDIENCE' have been populated."
 
     info "Updating audiences in $TFVARS_FILE_PATH..."
@@ -563,6 +583,10 @@ populate_oauth_secrets() {
 setup_db_secrets() {
     step 9 "Configuring Database Secrets" # Renumber subsequent steps
     
+    #T-Mobile regional_secrets_manager api endpoint
+    configure_regional_secretmanager
+    gcloud config get-value api_endpoint_overrides/secretmanager
+
     # 1. Enable required APIs first
     info "Enabling Secret Manager and SQL Admin APIs..."
     gcloud services enable secretmanager.googleapis.com sqladmin.googleapis.com --project="$GCP_PROJECT_ID"
@@ -570,7 +594,7 @@ setup_db_secrets() {
     local SECRET_NAME="creative-studio-db-password"
     
     # 2. Check if the secret already exists
-    if gcloud secrets describe "$SECRET_NAME" --project="$GCP_PROJECT_ID" > /dev/null 2>&1; then
+    if gcloud secrets describe "$SECRET_NAME" --project="$GCP_PROJECT_ID" --location="us-central1" > /dev/null 2>&1; then
         info "Secret '$SECRET_NAME' already exists. Skipping creation."
     else
         info "Creating new secret '$SECRET_NAME'..."
@@ -578,13 +602,25 @@ setup_db_secrets() {
         # 3. Generate a secure random password (alphanumeric, no special chars that break URLs)
         # using openssl. We use base64 but strip non-alphanumeric chars to be safe for DB connection strings
         local DB_PASSWORD=$(openssl rand -base64 20 | tr -dc 'a-zA-Z0-9' | head -c 16)
-        
+                
+
         # 4. Create the secret and add the first version
         # We use printf to avoid trailing newlines
-        printf "%s" "$DB_PASSWORD" | gcloud secrets create "$SECRET_NAME" \
+        #printf "%s" "$DB_PASSWORD" | gcloud secrets create "$SECRET_NAME" \
+        #    --data-file=- \
+        #    --replication-policy="user-managed" \
+        #    --locations="us-central1" \
+        #    --project="$GCP_PROJECT_ID" \
+        #    --quiet
+
+        gcloud secrets create "$SECRET_NAME" \
+            --location="us-central1" \
+            --project="$GCP_PROJECT_ID" \
+            --quiet
+
+        printf "%s" "$DB_PASSWORD" | gcloud secrets versions add "$SECRET_NAME" \
             --data-file=- \
-            --replication-policy="user-managed" \
-            --locations="us-central1" \
+            --location="us-central1" \
             --project="$GCP_PROJECT_ID" \
             --quiet
 
@@ -616,6 +652,10 @@ update_oauth_client() {
 
 update_secrets() {
     step 12 "Updating Remaining Secrets"; info "Navigating to $REPO_ROOT/infra/environments/$ENV_NAME..."; cd "$REPO_ROOT/infra/environments/$ENV_NAME"
+
+    #T-Mobile regional_secrets_manager api endpoint
+    configure_regional_secretmanager
+
     info "Populating values in Secret Manager..."; local TERRAFORM_OUTPUTS=$(terraform output -json)
     local FRONTEND_SECRETS=$(echo "$TERRAFORM_OUTPUTS" | jq -r .frontend_secrets.value[]); local BACKEND_SECRETS=$(echo "$TERRAFORM_OUTPUTS" | jq -r .backend_secrets.value[])
     local ALL_SECRETS=$(echo "${FRONTEND_SECRETS} ${BACKEND_SECRETS}" | tr ' ' '\n' | sort -u | grep .)
@@ -667,7 +707,7 @@ update_secrets() {
 
         if [ "$AUTO_DISCOVERED" = true ] && [ -n "$SECRET_VALUE" ]; then
             info "  Value was auto-detected from Firebase. Populating automatically."
-            echo -n "$SECRET_VALUE" | gcloud secrets versions add "$SECRET_NAME" --data-file="-" --project="$GCP_PROJECT_ID" --quiet
+            echo -n "$SECRET_VALUE" | gcloud secrets versions add "$SECRET_NAME" --data-file="-" --project="$GCP_PROJECT_ID" --location="us-central1"
             success "  Successfully added new version for ${SECRET_NAME}."
 
         else
@@ -677,7 +717,7 @@ update_secrets() {
             read -s -p "  Enter new value: " SECRET_VALUE < /dev/tty; echo
 
             if [ -z "$SECRET_VALUE" ]; then warn "  No value provided. Skipping ${SECRET_NAME}."; continue; fi
-            echo -n "$SECRET_VALUE" | gcloud secrets versions add "$SECRET_NAME" --data-file="-" --project="$GCP_PROJECT_ID" --quiet
+            echo -n "$SECRET_VALUE" | gcloud secrets versions add "$SECRET_NAME" --data-file="-" --project="$GCP_PROJECT_ID" --location="us-central1"
             success "  Successfully added new version for ${SECRET_NAME}."
         fi
     done; success "All secrets have been populated."
